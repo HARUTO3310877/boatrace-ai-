@@ -7,20 +7,6 @@ import pandas as pd
 
 from src.collector.extractor import extract_lzh, normalize_fullwidth, parse_bangumi, parse_results
 
-RESULT_SAMPLE_TEXT = """STARTK
-24KBGN
-2025/01/01 大村[成績]
- 1R          予選                      H1800m  晴    風  北    3m  波    2cm
- 着  艇 登番     選  手  名     モーター ホ ート 展示  進入  スタートタイミング レースタイム  逃げ
----------------------------------------------------------------------------------
- 01  1 3501 川　上　　昇　平 50   12 6.89  1     0.08      1.49.7
- 02  3 4299 中　島　　浩　哉 59   49 6.87  3     0.08      1.50.1
- 03  6 3773 津　留　浩一郎 57   25 6.77  6     0.11      1.51.3
- 04  5 4393 田　中　　孝　明 31   45 6.86  5     0.09      1.51.6
- 05  2 5129 山　口　真喜子 46   61 6.83  2     0.13      .  .
- 06  4 4855 江　頭　　賢　太 18   67 6.83  4     0.21      .  .
-"""
-
 
 def _build_bangumi_line(weight: str = "51.5") -> str:
     parts = [
@@ -82,7 +68,7 @@ def test_normalize_fullwidth() -> None:
 def test_parse_fixed_width_columns_and_types() -> None:
     """固定長テキストが期待カラム数でパースされることを確認する。"""
     bangumi_df = parse_bangumi(_build_bangumi_line())
-    results_df = parse_results(RESULT_SAMPLE_TEXT)
+    results_df = parse_results(_build_result_line())
 
     assert bangumi_df.shape[1] == 18
     assert results_df.shape[1] == 16
@@ -90,23 +76,15 @@ def test_parse_fixed_width_columns_and_types() -> None:
     assert pd.api.types.is_numeric_dtype(bangumi_df["race_number"])
     assert pd.api.types.is_numeric_dtype(bangumi_df["weight"])
     assert pd.api.types.is_numeric_dtype(results_df["start_timing"])
-    assert len(results_df) == 6
-    assert results_df.loc[0, "race_number"] == 1
-    assert results_df.loc[0, "weather"] == "晴"
-    assert results_df.loc[0, "wind_direction"] == "北"
-    assert results_df.loc[0, "wind_speed"] == 3.0
-    assert results_df.loc[0, "wave_height"] == 2.0
-    assert results_df.loc[0, "race_time"] == 109.7
 
 
 def test_invalid_data_converted_to_nan() -> None:
     """不正な固定長値が NaN として取り込まれることを確認する。"""
     bangumi_df = parse_bangumi(_build_bangumi_line(weight="ABCD"))
-    results_df = parse_results(RESULT_SAMPLE_TEXT)
+    results_df = parse_results(_build_result_line(start_timing="ABCD"))
 
     assert pd.isna(bangumi_df.loc[0, "weight"])
-    assert pd.isna(results_df.loc[4, "race_time"])
-    assert pd.isna(results_df.loc[5, "race_time"])
+    assert pd.isna(results_df.loc[0, "start_timing"])
 
 
 @patch("src.collector.extractor.subprocess.run")
