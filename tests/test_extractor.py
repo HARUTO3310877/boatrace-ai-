@@ -1,8 +1,11 @@
 """Tests for src.collector.extractor."""
 
+from pathlib import Path
+from unittest.mock import patch
+
 import pandas as pd
 
-from src.collector.extractor import normalize_fullwidth, parse_bangumi, parse_results
+from src.collector.extractor import extract_lzh, normalize_fullwidth, parse_bangumi, parse_results
 
 
 def _build_bangumi_line(weight: str = "51.5") -> str:
@@ -82,3 +85,23 @@ def test_invalid_data_converted_to_nan() -> None:
 
     assert pd.isna(bangumi_df.loc[0, "weight"])
     assert pd.isna(results_df.loc[0, "start_timing"])
+
+
+@patch("src.collector.extractor.subprocess.run")
+@patch("src.collector.extractor.shutil.which", return_value="7z")
+def test_extract_lzh_uses_7z_command(mock_which: object, mock_run: object, tmp_path: Path) -> None:
+    """extract_lzh が 7z コマンドで解凍・読込することを確認する。"""
+    lzh_path = tmp_path / "sample.lzh"
+    lzh_path.write_bytes(b"dummy")
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        out_opt = [str(a) for a in args[0] if str(a).startswith("-o")][0]
+        out_dir = Path(out_opt[2:])
+        (out_dir / "sample.txt").write_text("テスト", encoding="cp932")
+
+    mock_run.side_effect = fake_run
+    texts = extract_lzh(str(lzh_path))
+
+    assert texts == ["テスト"]
+    assert mock_which is not None
+    assert mock_run is not None

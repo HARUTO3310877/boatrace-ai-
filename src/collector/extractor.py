@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
+import tempfile
 import unicodedata
 from pathlib import Path
 from typing import Callable
 
 import pandas as pd
-from lhafile import Lhafile
 
 LOGGER = logging.getLogger(__name__)
 
@@ -118,12 +120,27 @@ def extract_lzh(lzh_path: str) -> list[str]:
 
     Returns:
         解凍されたテキストファイルの内容リスト。
+
+    Raises:
+        FileNotFoundError: 7z コマンドが見つからない場合。
+        subprocess.CalledProcessError: 解凍コマンドが失敗した場合。
     """
+    windows_7z = r"C:\Program Files\7-Zip\7z.exe"
+    seven_zip = windows_7z if Path(windows_7z).exists() else shutil.which("7z")
+    if not seven_zip:
+        raise FileNotFoundError("7z command not found. Install 7-Zip or add 7z to PATH.")
+
     texts: list[str] = []
-    with Lhafile(lzh_path) as archive:
-        for info in archive.infolist():
-            data = archive.read(info.filename)
-            texts.append(data.decode("cp932", errors="replace"))
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        subprocess.run(
+            [seven_zip, "x", "-y", lzh_path, f"-o{tmp_dir}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        for extracted in sorted(Path(tmp_dir).rglob("*")):
+            if extracted.is_file():
+                texts.append(extracted.read_text(encoding="cp932", errors="replace"))
     return texts
 
 
