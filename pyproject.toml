@@ -1,0 +1,22 @@
+[project]
+name = "boatrace-ai"
+version = "0.1.0"
+description = "競艇AI予測システム"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas",
+  "polars",
+  "lightgbm",
+  "scikit-learn",
+  "sqlalchemy",
+  "requests",
+  "lhafile",
+  "python-dotenv",
+  "tqdm",
+  "pytest",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
