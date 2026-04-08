@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import subprocess
 import tempfile
@@ -67,33 +66,6 @@ PAYOUT_COLUMNS = [
     "rentan3_payout",
 ]
 
-VENUE_CODE_MAP = {
-    "桐生": "01",
-    "戸田": "02",
-    "江戸川": "03",
-    "平和島": "04",
-    "多摩川": "05",
-    "浜名湖": "06",
-    "蒲郡": "07",
-    "常滑": "08",
-    "津": "09",
-    "三国": "10",
-    "びわこ": "11",
-    "住之江": "12",
-    "尼崎": "13",
-    "鳴門": "14",
-    "丸亀": "15",
-    "児島": "16",
-    "宮島": "17",
-    "徳山": "18",
-    "下関": "19",
-    "若松": "20",
-    "芦屋": "21",
-    "福岡": "22",
-    "唐津": "23",
-    "大村": "24",
-}
-
 
 def normalize_fullwidth(text: str) -> str:
     """全角文字を半角へ正規化する。
@@ -138,37 +110,6 @@ def _should_skip_header(line: str) -> bool:
     if not stripped:
         return True
     return not stripped[:8].isdigit()
-
-
-def _extract_file_context(text: str) -> tuple[str, str]:
-    """テキストヘッダから開催日と会場コードを抽出する。"""
-    normalized = normalize_fullwidth(text).replace("\u3000", " ")
-    date_match = re.search(r"(20\d{2})/\s*(\d{1,2})/\s*(\d{1,2})", normalized)
-    if date_match:
-        year, month, day = date_match.groups()
-        race_date = f"{year}{int(month):02d}{int(day):02d}"
-    else:
-        race_date = ""
-
-    compact = re.sub(r"\s+", "", normalized)
-    venue_code = ""
-    for venue_name, code in VENUE_CODE_MAP.items():
-        if venue_name in compact:
-            venue_code = code
-            break
-    return race_date, venue_code
-
-
-def _parse_race_time_to_seconds(raw: str) -> float:
-    """レースタイム文字列を秒へ変換する。"""
-    value = normalize_fullwidth(raw).strip()
-    if not value or value.replace(" ", "") == "..":
-        return float("nan")
-    match = re.match(r"^(\d+)\.(\d{2})\.(\d)$", value)
-    if not match:
-        return float("nan")
-    minute, seconds, tenth = match.groups()
-    return int(minute) * 60 + int(seconds) + int(tenth) / 10
 
 
 def extract_lzh(lzh_path: str) -> list[str]:
@@ -252,105 +193,30 @@ def parse_results(text: str) -> pd.DataFrame:
     Returns:
         競走成績 DataFrame。
     """
-    normalized_text = normalize_fullwidth(text).replace("\u3000", " ")
-    race_date, venue_code = _extract_file_context(normalized_text)
-    current_race_no: int | None = None
-    weather = ""
-    wind_direction = ""
-    wind_speed = float("nan")
-    wave_height = float("nan")
-    winning_technique = ""
     rows: list[dict[str, object]] = []
-
-    lines = normalized_text.splitlines()
-    for line_no, line in enumerate(lines, start=1):
-        header_match = re.search(
-            r"(\d+)R.*?(晴|曇|雨|雪|霧).*?風\s*([東西南北])\s*(\d+)m.*?波\s*(\d+)cm",
-            line,
-        )
-        if header_match:
-            try:
-                current_race_no = int(header_match.group(1))
-                weather = header_match.group(2)
-                wind_direction = header_match.group(3)
-                wind_speed = float(header_match.group(4))
-                wave_height = float(header_match.group(5))
-                winning_technique = ""
-                if line_no + 2 < len(lines):
-                    wt_match = re.search(r"(逃げ|まくり|差し|まくり差し|恵まれ)$", lines[line_no + 2].strip())
-                    if wt_match:
-                        winning_technique = wt_match.group(1)
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.exception("Failed to parse race header line %s: %s", line_no, exc)
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if _should_skip_header(line):
             continue
-
-        row_match = re.match(r"^\s+(\d{2})\s+(\d)\s+(\d{4})\s+(.+)$", line)
-        if not row_match:
-            continue
-
-        if current_race_no is None:
-            LOGGER.warning("Skip result line without race header at line %s", line_no)
-            continue
-
         try:
-            finish_position = _to_int(row_match.group(1))
-            lane = _to_int(row_match.group(2))
-            player_id = _to_int(row_match.group(3))
-            tail = row_match.group(4).strip()
-            tokens = re.split(r"\s+", tail)
-
-            if len(tokens) < 8:
-                LOGGER.warning("Skip malformed result line %s: %s", line_no, line)
-                continue
-
-            if len(tokens) >= 9 and tokens[-2] == "." and tokens[-1] == ".":
-                race_time_token = ". ."
-                start_timing_token = tokens[-3]
-                course_token = tokens[-4]
-                exhibition_token = tokens[-5]
-                boat_token = tokens[-6]
-                motor_token = tokens[-7]
-                player_name_tokens = tokens[:-7]
-            else:
-                race_time_token = tokens[-1]
-                start_timing_token = tokens[-2]
-                course_token = tokens[-3]
-                exhibition_token = tokens[-4]
-                boat_token = tokens[-5]
-                motor_token = tokens[-6]
-                player_name_tokens = tokens[:-6]
-
-            if not player_name_tokens:
-                LOGGER.warning("Skip malformed player name at line %s: %s", line_no, line)
-                continue
-
-            _ = _to_int(motor_token)
-            _ = _to_int(boat_token)
-            _ = _to_float(exhibition_token)
-            course_position = _to_int(course_token)
-            start_timing = _to_float(start_timing_token)
-            race_time = _parse_race_time_to_seconds(race_time_token)
-
-            rows.append(
-                {
-                    "race_date": race_date,
-                    "venue_code": venue_code,
-                    "race_number": current_race_no,
-                    "lane": lane,
-                    "player_id": player_id,
-                    "finish_position": finish_position,
-                    "race_time": race_time,
-                    "course_position": course_position,
-                    "start_timing": start_timing,
-                    "winning_technique": winning_technique,
-                    "weather": weather,
-                    "wind_direction": wind_direction,
-                    "wind_speed": wind_speed,
-                    "wave_height": wave_height,
-                    "temperature": float("nan"),
-                    "water_temperature": float("nan"),
-                }
-            )
+            row = {
+                "race_date": _slice(line, 0, 8),
+                "venue_code": _slice(line, 8, 10),
+                "race_number": _to_int(_slice(line, 10, 12)),
+                "lane": _to_int(_slice(line, 12, 13)),
+                "player_id": _to_int(_slice(line, 13, 19)),
+                "finish_position": _to_int(_slice(line, 19, 20)),
+                "race_time": _slice(line, 20, 28),
+                "course_position": _to_int(_slice(line, 28, 29)),
+                "start_timing": _to_float(_slice(line, 29, 33)),
+                "winning_technique": _slice(line, 33, 41),
+                "weather": _slice(line, 41, 45),
+                "wind_direction": _slice(line, 45, 49),
+                "wind_speed": _to_float(_slice(line, 49, 52)),
+                "wave_height": _to_float(_slice(line, 52, 55)),
+                "temperature": _to_float(_slice(line, 55, 58)),
+                "water_temperature": _to_float(_slice(line, 58, 61)),
+            }
+            rows.append(row)
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Failed to parse result line %s: %s", line_no, exc)
     return pd.DataFrame(rows, columns=RESULT_COLUMNS)
@@ -365,47 +231,25 @@ def parse_payouts(text: str) -> pd.DataFrame:
     Returns:
         払戻金 DataFrame。
     """
-    race_date, venue_code = _extract_file_context(text)
-    current_race_no: int | None = None
-    payout_by_race: dict[int, dict[str, object]] = {}
-
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        line = normalize_fullwidth(raw_line)
-        header_match = re.match(r"^\s*(\d+)R\s+", line)
-        if header_match:
-            current_race_no = int(header_match.group(1))
-            payout_by_race[current_race_no] = {
-                "race_date": race_date,
-                "venue_code": venue_code,
-                "race_number": current_race_no,
-                "tansho_combo": "",
-                "tansho_payout": float("nan"),
-                "rentan2_combo": "",
-                "rentan2_payout": float("nan"),
-                "rentan3_combo": "",
-                "rentan3_payout": float("nan"),
-            }
-            continue
-        if current_race_no is None:
+    rows: list[dict[str, object]] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if _should_skip_header(line):
             continue
         try:
-            tansho = re.search(r"単\s*勝\s+([0-9\-]+)\s+([0-9]+)", line)
-            if tansho:
-                payout_by_race[current_race_no]["tansho_combo"] = tansho.group(1)
-                payout_by_race[current_race_no]["tansho_payout"] = int(tansho.group(2))
-
-            rentan2 = re.search(r"2連単\s+([0-9\-]+)\s+([0-9]+)", line)
-            if rentan2:
-                payout_by_race[current_race_no]["rentan2_combo"] = rentan2.group(1)
-                payout_by_race[current_race_no]["rentan2_payout"] = int(rentan2.group(2))
-
-            rentan3 = re.search(r"3連単\s+([0-9\-]+)\s+([0-9]+)", line)
-            if rentan3:
-                payout_by_race[current_race_no]["rentan3_combo"] = rentan3.group(1)
-                payout_by_race[current_race_no]["rentan3_payout"] = int(rentan3.group(2))
+            row = {
+                "race_date": _slice(line, 0, 8),
+                "venue_code": _slice(line, 8, 10),
+                "race_number": _to_int(_slice(line, 10, 12)),
+                "tansho_combo": _slice(line, 61, 64),
+                "tansho_payout": _to_int(_slice(line, 64, 70)),
+                "rentan2_combo": _slice(line, 70, 75),
+                "rentan2_payout": _to_int(_slice(line, 75, 81)),
+                "rentan3_combo": _slice(line, 81, 88),
+                "rentan3_payout": _to_int(_slice(line, 88, 95)),
+            }
+            rows.append(row)
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Failed to parse payout line %s: %s", line_no, exc)
-    rows = list(payout_by_race.values())
     return pd.DataFrame(rows, columns=PAYOUT_COLUMNS)
 
 
